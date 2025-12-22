@@ -28,7 +28,14 @@ h1 {
   background: #e0f2f1;
   border-bottom: 1px solid #ccc;
 }
-
+#sort-select {
+  margin-left: 8px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid #0f766e;
+  background: white;
+  font-size: 13px;
+}
 #category-filters button {
   margin: 4px 4px 4px 0;
   padding: 4px 10px;
@@ -121,4 +128,29 @@ main {
 
 .hidden {
   display: none;
+}
+#pager {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#pager button {
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid #0f766e;
+  background: white;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+#pager button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#page-info {
+  font-size: 13px;
+  color: #333;
 }

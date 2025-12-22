@@ -23,6 +23,17 @@
       placeholder="輸入關鍵字搜尋標題"
     />
   </div>
+  <select id="sort-select">
+    <option value="createdAt_desc" selected>最新在前</option>
+    <option value="createdAt_asc">最舊在前</option>
+    <option value="title_asc">標題 A→Z</option>
+    <option value="title_desc">標題 Z→A</option>
+  </select>
+  <div id="pager">
+    <button id="prev-page" disabled>上一頁</button>
+    <span id="page-info"></span>
+    <button id="next-page" disabled>下一頁</button>
+  </div>
 
   <main>
     <div id="content-list"></div>

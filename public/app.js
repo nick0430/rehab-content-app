@@ -1,125 +1,222 @@
 // =======================
 // DOM 元素參考
 // =======================
-const listEl = document.getElementById("content-list");      // 卡片列表區
-const detailEl = document.getElementById("detail-view");  // 詳情區
-const statusEl = document.getElementById("status");          // 狀態訊息區（例如：載入中 / 錯誤）
-const filterContainer = document.getElementById("category-filters"); // 分類按鈕區
+const listEl = document.getElementById("content-list");
+const detailEl = document.getElementById("detail-view");
+const statusEl = document.getElementById("status");
+const filterContainer = document.getElementById("category-filters");
+
+const prevBtn = document.getElementById("prev-page");
+const nextBtn = document.getElementById("next-page");
+const pageInfoEl = document.getElementById("page-info");
 
 // =======================
 // 全域狀態
 // =======================
+let contents = []; // 這一頁的 rows
 
-// 從後端 API 拿回來的所有內容
-let contents = [];
+let currentCategory = "all";
+let currentKeyword = "";
 
-// 目前使用者選擇的「篩選條件」
-let currentCategory = "all"; // "all" / "膝蓋" / "肩部" / ...
-let currentKeyword = "";     // 搜尋關鍵字（標題用）
+let currentPage = 1;
+let pageSize = 5; // 你想一頁幾筆可改這裡
+let total = 0;
+let currentSort = "createdAt";
+let currentOrder = "desc";
+const USE_CURSOR = true;
 
-// =======================
-// 工具函式：從資料裡取出分類
-// =======================
-function getCategoriesFromContents(list) {
-  const set = new Set();
-  list.forEach(item => {
-    if (item.category) {
-      set.add(item.category);
-    }
-  });
-  return Array.from(set);
-}
+// cursorStack 代表「每一頁 fetch 時用的 cursor」
+// 第 1 頁 cursor = null
+let cursorStack = [null];
+let cursorIndex = 0;
 
+// 後端回傳的下一頁 cursor（按下一頁會用到）
+let nextCursor = null;
+
+// 是否還有下一頁
+let hasNext = false;
 // =======================
-// 畫出分類按鈕
+// 畫分類按鈕（改成由 /api/categories 取得）
 // =======================
-function renderCategoryFilters() {
+function renderCategoryFilters(categories) {
   if (!filterContainer) return;
-  const categories = getCategoriesFromContents(contents);
 
   let html = `<button data-category="all" class="active">全部</button>`;
-  categories.forEach(cat => {
+  categories.forEach((cat) => {
     html += `<button data-category="${cat}">${cat}</button>`;
   });
 
   filterContainer.innerHTML = html;
 }
 
-// =======================
-// 綁定分類按鈕事件
-// =======================
 function setupFilterButtons() {
   if (!filterContainer) return;
 
   const buttons = filterContainer.querySelectorAll("button");
-
-  buttons.forEach(btn => {
+  buttons.forEach((btn) => {
     btn.addEventListener("click", () => {
-      // 切換按鈕樣式
-      buttons.forEach(b => b.classList.remove("active"));
+      buttons.forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
 
-      // 更新目前分類狀態
       const category = btn.dataset.category;
       currentCategory = !category || category === "all" ? "all" : category;
 
-      // 確保顯示列表畫面
+      // ✅ 條件改變 → 回到第 1 頁
+      currentPage = 1;
+
       detailEl.classList.add("hidden");
       listEl.classList.remove("hidden");
 
-      // 根據最新條件重新篩選
-      applyFilters();
+      fetchListFromServer();
     });
   });
 }
 
 // =======================
-// 綁定搜尋輸入框事件
+// 搜尋（改成 server-side）
 // =======================
 function setupSearch() {
   const searchInput = document.getElementById("search-input");
   if (!searchInput) return;
 
   searchInput.addEventListener("input", () => {
-    // 更新目前搜尋字
     currentKeyword = searchInput.value;
 
-    // 確保顯示列表畫面
+    currentPage = 1;
+
     detailEl.classList.add("hidden");
     listEl.classList.remove("hidden");
 
-    // 根據最新條件重新篩選
-    applyFilters();
+    fetchListFromServer();
   });
 }
 
 // =======================
-// 依目前狀態（分類＋關鍵字）篩選，再畫列表
+// 分頁 UI
 // =======================
-function applyFilters() {
-  if (!Array.isArray(contents)) {
-    renderList([]);
-    return;
+function updatePager() {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  if (pageInfoEl) {
+    const pageText = USE_CURSOR ? cursorIndex + 1 : currentPage;
+    pageInfoEl.textContent = `第 ${pageText} / ${totalPages} 頁（共 ${total} 筆）`;
   }
 
-  const keyword = currentKeyword.trim().toLowerCase();
-
-  const filtered = contents.filter(item => {
-    // 類別條件
-    const matchCategory =
-      currentCategory === "all" || item.category === currentCategory;
-
-    // 關鍵字條件（套在 title 上）
-    const titleText = (item.title || "").toLowerCase();
-    const matchKeyword =
-      keyword === "" || titleText.includes(keyword);
-
-    return matchCategory && matchKeyword;
-  });
-
-  renderList(filtered);
+  if (prevBtn) prevBtn.disabled = USE_CURSOR ? cursorIndex <= 0 : currentPage <= 1;
+  if (nextBtn) nextBtn.disabled = USE_CURSOR ? !hasNext : currentPage >= totalPages;
 }
 
+function setupPager() {
+  if (prevBtn) {
+    prevBtn.addEventListener("click", () => {
+      if (USE_CURSOR) {
+        if (cursorIndex > 0) {
+          cursorIndex -= 1;
+          fetchListFromServer();
+        }
+      } else {
+        if (currentPage > 1) {
+          currentPage -= 1;
+          fetchListFromServer();
+        }
+      }
+    });
+  }
+
+  if (nextBtn) {
+    nextBtn.addEventListener("click", () => {
+      if (USE_CURSOR) {
+        if (hasNext && nextCursor) {
+          // 往後翻頁：把「下一頁的 cursor」存進 stack
+          cursorStack = cursorStack.slice(0, cursorIndex + 1);
+          cursorStack.push(nextCursor);
+          cursorIndex += 1;
+          fetchListFromServer();
+        }
+      } else {
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        if (currentPage < totalPages) {
+          currentPage += 1;
+          fetchListFromServer();
+        }
+      }
+    });
+  }
+}
+
+// =======================
+// 從後端抓「列表（分頁）」
+// =======================
+async function fetchListFromServer() {
+  try {
+    statusEl.textContent = "載入中...";
+
+    const params = new URLSearchParams();
+
+    // 篩選
+    if (currentCategory !== "all") params.set("category", currentCategory);
+
+    const keyword = currentKeyword.trim();
+    if (keyword !== "") params.set("q", keyword);
+
+    // 分頁大小
+    params.set("limit", String(pageSize));
+
+    // 排序
+    params.set("sort", currentSort);
+    params.set("order", currentOrder);
+
+    if (USE_CURSOR) {
+      params.set("mode", "cursor");
+
+      const cursorUsed = cursorStack[cursorIndex];
+      if (cursorUsed) {
+        params.set("cursorId", String(cursorUsed.id));
+        params.set("cursorCreatedAt", String(cursorUsed.createdAt));
+      }
+    } else {
+      params.set("mode", "offset");
+      params.set("page", String(currentPage));
+    }
+
+    const res = await fetch(`/api/contents?${params.toString()}`);
+    if (!res.ok) {
+      statusEl.textContent = `載入列表失敗（${res.status}）`;
+      return;
+    }
+
+    const data = await res.json();
+
+    const rows = Array.isArray(data?.rows) ? data.rows : [];
+    contents = rows;
+
+    total = Number.isFinite(data?.total) ? data.total : rows.length;
+
+    // ✅ cursor 模式專用：拿 hasNext / nextCursor
+    hasNext = Boolean(data?.hasNext);
+    nextCursor = data?.nextCursor || null;
+
+    statusEl.textContent = "";
+    renderList(contents);
+    updatePager();
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = "載入內容失敗，請稍後再試。";
+  }
+}
+function setupSort() {
+      const el = document.getElementById("sort-select");
+      if (!el) return;
+
+      el.addEventListener("change", () => {
+        const [s, o] = el.value.split("_");
+        currentSort = s;
+        currentOrder = o;
+
+        currentPage = 1;
+        fetchListFromServer();
+      });
+    }
 // =======================
 // 畫出卡片列表（安全版）
 // =======================
@@ -135,23 +232,20 @@ function renderList(list) {
 
   const fragment = document.createDocumentFragment();
 
-  list.forEach(item => {
+  list.forEach((item) => {
     const card = document.createElement("div");
     card.className = "card";
-    card.dataset.id = item.id; // 之後拿來載入單一內容
+    card.dataset.id = item.id;
 
-    // 標題
     const titleEl = document.createElement("h3");
     titleEl.className = "title";
     titleEl.textContent = item.title || "（未命名內容）";
 
-    // 類別＋型態
     const metaEl = document.createElement("p");
     metaEl.className = "meta";
     const typeLabel = item.type === "video" ? "影片" : "文章";
     metaEl.textContent = `${item.category || "未分類"} ｜ ${typeLabel}`;
 
-    // 簡短摘要
     const shortEl = document.createElement("p");
     shortEl.className = "short";
     shortEl.textContent = item.short || "";
@@ -165,7 +259,6 @@ function renderList(list) {
 
   listEl.appendChild(fragment);
 
-  // 綁定卡片點擊
   setupCardClick();
 }
 
@@ -175,11 +268,10 @@ function renderList(list) {
 function setupCardClick() {
   const cards = listEl.querySelectorAll(".card");
 
-  cards.forEach(card => {
+  cards.forEach((card) => {
     card.addEventListener("click", () => {
       const id = Number(card.dataset.id);
       if (Number.isNaN(id)) return;
-
       loadContentById(id);
     });
   });
@@ -194,11 +286,7 @@ async function loadContentById(id) {
 
     const res = await fetch(`/api/contents/${id}`);
     if (!res.ok) {
-      if (res.status === 404) {
-        statusEl.textContent = "找不到這則內容。";
-      } else {
-        statusEl.textContent = `載入內容失敗（${res.status}）`;
-      }
+      statusEl.textContent = res.status === 404 ? "找不到這則內容。" : `載入內容失敗（${res.status}）`;
       return;
     }
 
@@ -212,14 +300,12 @@ async function loadContentById(id) {
 }
 
 // =======================
-// 顯示單一內容詳情（折衷安全版）
+// 顯示單一內容詳情（保留你原本的邏輯）
 // =======================
 function showDetail(item) {
-  // 切換畫面
   listEl.classList.add("hidden");
   detailEl.classList.remove("hidden");
 
-  // 先決定基本結構（架子）
   if (item.type === "article") {
     detailEl.innerHTML = `
       <button id="back-btn">← 返回列表</button>
@@ -264,7 +350,6 @@ function showDetail(item) {
     `;
   }
 
-  // 返回按鈕
   const backBtn = document.getElementById("back-btn");
   if (backBtn) {
     backBtn.addEventListener("click", () => {
@@ -277,19 +362,11 @@ function showDetail(item) {
   const metaEl = detailEl.querySelector(".detail-meta");
   const contentBody = detailEl.querySelector(".content-body");
 
-  // =========================
-  // 文章類型 article
-  // =========================
   if (item.type === "article") {
-    // 顯示區
     if (titleEl) titleEl.textContent = item.title;
     if (metaEl) metaEl.textContent = `分類：${item.category}`;
-    if (contentBody) {
-      // ⭐ 用 textContent，而不是 innerHTML（避免 XSS）
-      contentBody.textContent = item.content || "（尚未提供內容）";
-    }
+    if (contentBody) contentBody.textContent = item.content || "（尚未提供內容）";
 
-    // 編輯區
     const titleInput = document.getElementById("edit-title");
     const contentInput = document.getElementById("edit-content");
     const saveBtn = document.getElementById("save-btn");
@@ -312,29 +389,18 @@ function showDetail(item) {
 
           const res = await fetch(`/api/contents/${item.id}`, {
             method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              title: newTitle,
-              content: newContent,
-            }),
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: newTitle, content: newContent }),
           });
 
-          if (!res.ok) {
-            throw new Error("儲存失敗：" + res.status);
-          }
+          if (!res.ok) throw new Error("儲存失敗：" + res.status);
 
           const updated = await res.json();
           statusEl.textContent = "已儲存。";
 
-          // 更新前端陣列
-          const idx = contents.findIndex(c => c.id === updated.id);
-          if (idx !== -1) {
-            contents[idx] = updated;
-          }
+          // ✅ 列表是 server-side，更新後直接重新抓一次當前頁
+          await fetchListFromServer();
 
-          // 重新顯示更新後的詳情
           showDetail(updated);
         } catch (err) {
           console.error(err);
@@ -343,20 +409,10 @@ function showDetail(item) {
         }
       });
     }
-
-  // =========================
-  // 影片類型 video
-  // =========================
   } else if (item.type === "video") {
     if (titleEl) titleEl.textContent = item.title;
-    if (metaEl) {
-      metaEl.textContent = `分類：${item.category} ｜ 難度：${
-        item.difficulty || "未設定"
-      }`;
-    }
-    if (contentBody) {
-      contentBody.textContent = item.description || "";
-    }
+    if (metaEl) metaEl.textContent = `分類：${item.category} ｜ 難度：${item.difficulty || "未設定"}`;
+    if (contentBody) contentBody.textContent = item.description || "";
 
     const videoLine1 = detailEl.querySelector(".video-line1");
     const videoLine2 = detailEl.querySelector(".video-line2");
@@ -379,36 +435,32 @@ function showDetail(item) {
     }
   }
 }
-
-// =======================
-// 初次載入列表：從後端撈資料
-// =======================
-async function loadContents() {
-  try {
-    statusEl.textContent = "載入中...";
-
-    const res = await fetch("/api/contents");
-    if (!res.ok) {
-      statusEl.textContent = `載入列表失敗（${res.status}）`;
-      return;
-    }
-
-    const data = await res.json();
-    contents = Array.isArray(data) ? data : [];
-    statusEl.textContent = "";
-
-    // 建立分類按鈕、綁定事件
-    renderCategoryFilters();
-    setupFilterButtons();
-    setupSearch();
-
-    // 依預設條件（全部＋沒有關鍵字）先畫一次列表
-    applyFilters();
-  } catch (err) {
-    console.error(err);
-    statusEl.textContent = "載入內容失敗，請稍後再試。";
+function resetPaging() {
+  if (USE_CURSOR) {
+    cursorStack = [null];
+    cursorIndex = 0;
+    nextCursor = null;
+    hasNext = false;
+  } else {
+    currentPage = 1;
   }
 }
+// =======================
+// 初次載入：先抓分類、再抓第 1 頁列表
+// =======================
+async function loadCategoriesAndFirstPage() {
+  try {
+    const res = await fetch("/api/categories");
+    const categories = res.ok ? await res.json() : [];
+    renderCategoryFilters(Array.isArray(categories) ? categories : []);
+    setupFilterButtons();
+  } catch (err) {
+    console.error(err);
+  }
 
-// 直接呼叫載入（假設 script 放在 body 最後）
-loadContents();
+  setupSearch();
+  setupPager();
+  fetchListFromServer();
+}
+setupSort();
+loadCategoriesAndFirstPage();

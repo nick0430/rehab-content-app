@@ -1,0 +1,4 @@
+-- CreateTable
+CREATE TABLE "TempPing" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT
+);
