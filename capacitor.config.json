@@ -1,0 +1,9 @@
+{
+  "appId": "com.nick.rehabdemotest",
+  "appName": "RehabDemo",
+  "webDir": "public",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true
+  }
+}

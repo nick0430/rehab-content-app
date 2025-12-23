@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">RehabDemo</string>
+    <string name="title_activity_main">RehabDemo</string>
+    <string name="package_name">com.nick.rehabdemotest</string>
+    <string name="custom_url_scheme">com.nick.rehabdemotest</string>
+</resources>

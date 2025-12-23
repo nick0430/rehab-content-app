@@ -1,7 +1,9 @@
+
 // server.js
 require("dotenv").config();
 
 const express = require("express");
+const cors = require("cors");
 const path = require("path");
 
 // Prisma v7 + SQLite adapter（你目前的 Prisma Client 是 engine type "client"，必須用 adapter）
@@ -23,6 +25,7 @@ const port = process.env.PORT || 3000;
 // Middleware
 // -----------------------
 // 解析 JSON body（PUT / POST 會用到）
+app.use(cors()); // 允許所有來源（測試用最省事）
 app.use(express.json());
 
 // 讓 public 裡的靜態檔案可被瀏覽器讀取（/、/styles.css、/app.js）

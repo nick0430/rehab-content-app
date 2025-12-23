@@ -1,3 +1,14 @@
+// ===== API base：放在 app.js 最上面 =====
+const IS_CAPACITOR = typeof window !== "undefined" && !!window.Capacitor;
+
+// Android 模擬器連你電腦 localhost 用 10.0.2.2
+const API_BASE = IS_CAPACITOR ? "http://10.0.2.2:3000" : "";
+
+// 統一組 URL
+const apiUrl = (path) => `${API_BASE}${path}`;
+
+console.log("[boot]", { IS_CAPACITOR, API_BASE, href: location.href });
+
 // =======================
 // DOM 元素參考
 // =======================
@@ -179,7 +190,9 @@ async function fetchListFromServer() {
       params.set("page", String(currentPage));
     }
 
-    const res = await fetch(`/api/contents?${params.toString()}`);
+    const url = apiUrl(`/api/contents?${params.toString()}`);
+    console.log("[fetch]", url);
+    const res = await fetch(url);
     if (!res.ok) {
       statusEl.textContent = `載入列表失敗（${res.status}）`;
       return;
@@ -187,21 +200,34 @@ async function fetchListFromServer() {
 
     const data = await res.json();
 
-    const rows = Array.isArray(data?.rows) ? data.rows : [];
+    // ✅ 相容兩種後端回傳：
+    // 1) 直接回傳陣列 [...]
+    // 2) 回傳物件 { rows, total, hasNext, nextCursor }
+    let rows = [];
+    let _total = 0;
+
+    if (Array.isArray(data)) {
+      rows = data;
+      _total = data.length;
+      hasNext = false;
+      nextCursor = null;
+    } else {
+      rows = Array.isArray(data?.rows) ? data.rows : [];
+      _total = Number.isFinite(data?.total) ? data.total : rows.length;
+      hasNext = Boolean(data?.hasNext);
+      nextCursor = data?.nextCursor || null;
+    }
+
     contents = rows;
-
-    total = Number.isFinite(data?.total) ? data.total : rows.length;
-
-    // ✅ cursor 模式專用：拿 hasNext / nextCursor
-    hasNext = Boolean(data?.hasNext);
-    nextCursor = data?.nextCursor || null;
+    total = _total;
 
     statusEl.textContent = "";
     renderList(contents);
     updatePager();
   } catch (err) {
     console.error(err);
-    statusEl.textContent = "載入內容失敗，請稍後再試。";
+    statusEl.textContent = `載入內容失敗：${err?.message || err}`;
+
   }
 }
 function setupSort() {
@@ -284,7 +310,7 @@ async function loadContentById(id) {
   try {
     statusEl.textContent = "載入內容中...";
 
-    const res = await fetch(`/api/contents/${id}`);
+    const res = await fetch(apiUrl(`/api/contents/${id}`));
     if (!res.ok) {
       statusEl.textContent = res.status === 404 ? "找不到這則內容。" : `載入內容失敗（${res.status}）`;
       return;
@@ -387,7 +413,7 @@ function showDetail(item) {
         try {
           statusEl.textContent = "儲存中...";
 
-          const res = await fetch(`/api/contents/${item.id}`, {
+          const res = await fetch(apiUrl(`/api/contents/${item.id}`), {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ title: newTitle, content: newContent }),
@@ -450,7 +476,7 @@ function resetPaging() {
 // =======================
 async function loadCategoriesAndFirstPage() {
   try {
-    const res = await fetch("/api/categories");
+    const res = await fetch(apiUrl("/api/categories"));
     const categories = res.ok ? await res.json() : [];
     renderCategoryFilters(Array.isArray(categories) ? categories : []);
     setupFilterButtons();
