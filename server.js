@@ -3,10 +3,31 @@ require("dotenv").config();
 
 const express = require("express");
 const path = require("path");
+const cors = require("cors");
 
 // Prisma v7 + SQLite adapter（你目前的 Prisma Client 是 engine type "client"，必須用 adapter）
 const { PrismaClient } = require("./prisma/generated/client");
 const { PrismaBetterSqlite3 } = require("@prisma/adapter-better-sqlite3");
+
+// ✅ CORS：允許 iOS App (capacitor://localhost) 以及本機開發
+const corsOptions = {
+  origin: (origin, cb) => {
+    // 沒有 origin（例如 curl / server-to-server）先放行
+    if (!origin) return cb(null, true);
+
+    const allowlist = new Set([
+      "capacitor://localhost",
+      "ionic://localhost",
+      "http://localhost",
+      "http://localhost:3000",
+    ]);
+
+    if (allowlist.has(origin)) return cb(null, true);
+    return cb(new Error("CORS blocked: " + origin));
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+};
 
 // 建立 SQLite adapter：url 來自 .env 的 DATABASE_URL
 const adapter = new PrismaBetterSqlite3({
@@ -22,6 +43,10 @@ const port = process.env.PORT || 3000;
 // -----------------------
 // Middleware
 // -----------------------
+// ✅ CORS 必須放在路由前，且 PUT 會有 preflight(OPTIONS)
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
+
 // 解析 JSON body（PUT / POST 會用到）
 app.use(express.json());
 
@@ -184,6 +209,7 @@ app.get("/api/contents", async (req, res) => {
     res.status(500).json({ message: "資料庫查詢失敗" });
   }
 });
+
 app.get("/api/categories", async (req, res) => {
   try {
     const rows = await prisma.content.findMany({
@@ -202,6 +228,7 @@ app.get("/api/categories", async (req, res) => {
     res.status(500).json({ message: "取得分類失敗" });
   }
 });
+
 // -----------------------
 // GET /api/contents/:id
 // 單一詳情：回完整一筆（文章含 content、影片含 videoUrl/description）
