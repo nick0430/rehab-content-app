@@ -1,0 +1,6 @@
+{
+	"appId": "com.nick.myapp",
+	"appName": "Myapp",
+	"webDir": "public",
+	"packageClassList": []
+}
