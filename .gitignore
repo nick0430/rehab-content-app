@@ -16,3 +16,6 @@ ios/**/project.xcworkspace/
 
 # your backup folder
 ios_bak_*
+# Capacitor / iOS generated (keep out of main)
+ios/
+ios_bak_*
