@@ -6,3 +6,13 @@ node_modules/
 !.env.example
 
 /generated/prisma
+# Xcode user / workspace noise
+*.xcuserstate
+ios/**/xcuserdata/
+ios/**/project.xcworkspace/
+
+# macOS
+.DS_Store
+
+# your backup folder
+ios_bak_*
