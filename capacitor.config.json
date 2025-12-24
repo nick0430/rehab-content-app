@@ -1,0 +1,6 @@
+{
+  "appId": "com.nick.rehabcontentapp",
+  "appName": "RehabContentApp",
+  "webDir": "public",
+  "bundledWebRuntime": false
+}

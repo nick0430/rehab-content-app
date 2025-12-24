@@ -1,3 +1,12 @@
+// public/app.js
+
+const IS_NATIVE =
+  window.location.protocol === "capacitor:" ||
+  window.location.protocol === "ionic:";
+
+// ⚠️ 不要在結尾加 /
+const API_BASE = IS_NATIVE ? "https://rehab-content-app.onrender.com" : "";
+
 // =======================
 // DOM 元素參考
 // =======================
@@ -19,10 +28,13 @@ let currentCategory = "all";
 let currentKeyword = "";
 
 let currentPage = 1;
-let pageSize = 5; // 你想一頁幾筆可改這裡
+let pageSize = 5;
 let total = 0;
+
 let currentSort = "createdAt";
 let currentOrder = "desc";
+
+// 你目前用 cursor
 const USE_CURSOR = true;
 
 // cursorStack 代表「每一頁 fetch 時用的 cursor」
@@ -35,8 +47,41 @@ let nextCursor = null;
 
 // 是否還有下一頁
 let hasNext = false;
+
 // =======================
-// 畫分類按鈕（改成由 /api/categories 取得）
+// 小工具：fetch JSON 防呆
+// =======================
+async function fetchJson(url, options) {
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    const msg = `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+  const ct = res.headers.get("content-type") || "";
+  if (!ct.includes("application/json")) {
+    // 很關鍵：避免拿到 HTML 卻硬 json()
+    const text = await res.text();
+    throw new Error("Not JSON response: " + ct + " / " + text.slice(0, 80));
+  }
+  return res.json();
+}
+
+// =======================
+// 分頁 reset（cursor/offset 都處理）
+// =======================
+function resetPaging() {
+  if (USE_CURSOR) {
+    cursorStack = [null];
+    cursorIndex = 0;
+    nextCursor = null;
+    hasNext = false;
+  } else {
+    currentPage = 1;
+  }
+}
+
+// =======================
+// 畫分類按鈕（由 /api/categories 取得）
 // =======================
 function renderCategoryFilters(categories) {
   if (!filterContainer) return;
@@ -61,8 +106,8 @@ function setupFilterButtons() {
       const category = btn.dataset.category;
       currentCategory = !category || category === "all" ? "all" : category;
 
-      // ✅ 條件改變 → 回到第 1 頁
-      currentPage = 1;
+      // ✅ 條件改變 → 回到第 1 頁（cursor 也要 reset）
+      resetPaging();
 
       detailEl.classList.add("hidden");
       listEl.classList.remove("hidden");
@@ -73,7 +118,7 @@ function setupFilterButtons() {
 }
 
 // =======================
-// 搜尋（改成 server-side）
+// 搜尋（server-side）
 // =======================
 function setupSearch() {
   const searchInput = document.getElementById("search-input");
@@ -82,11 +127,30 @@ function setupSearch() {
   searchInput.addEventListener("input", () => {
     currentKeyword = searchInput.value;
 
-    currentPage = 1;
+    // ✅ 條件改變 → 回到第 1 頁（cursor 也要 reset）
+    resetPaging();
 
     detailEl.classList.add("hidden");
     listEl.classList.remove("hidden");
 
+    fetchListFromServer();
+  });
+}
+
+// =======================
+// 排序
+// =======================
+function setupSort() {
+  const el = document.getElementById("sort-select");
+  if (!el) return;
+
+  el.addEventListener("change", () => {
+    const [s, o] = el.value.split("_");
+    currentSort = s;
+    currentOrder = o;
+
+    // ✅ 條件改變 → 回到第 1 頁（cursor 也要 reset）
+    resetPaging();
     fetchListFromServer();
   });
 }
@@ -127,7 +191,6 @@ function setupPager() {
     nextBtn.addEventListener("click", () => {
       if (USE_CURSOR) {
         if (hasNext && nextCursor) {
-          // 往後翻頁：把「下一頁的 cursor」存進 stack
           cursorStack = cursorStack.slice(0, cursorIndex + 1);
           cursorStack.push(nextCursor);
           cursorIndex += 1;
@@ -149,7 +212,7 @@ function setupPager() {
 // =======================
 async function fetchListFromServer() {
   try {
-    statusEl.textContent = "載入中...";
+    if (statusEl) statusEl.textContent = "載入中...";
 
     const params = new URLSearchParams();
 
@@ -179,48 +242,32 @@ async function fetchListFromServer() {
       params.set("page", String(currentPage));
     }
 
-    const res = await fetch(`/api/contents?${params.toString()}`);
-    if (!res.ok) {
-      statusEl.textContent = `載入列表失敗（${res.status}）`;
-      return;
-    }
-
-    const data = await res.json();
+    const data = await fetchJson(`${API_BASE}/api/contents?${params.toString()}`);
 
     const rows = Array.isArray(data?.rows) ? data.rows : [];
     contents = rows;
 
     total = Number.isFinite(data?.total) ? data.total : rows.length;
 
-    // ✅ cursor 模式專用：拿 hasNext / nextCursor
+    // cursor 模式：拿 hasNext / nextCursor
     hasNext = Boolean(data?.hasNext);
     nextCursor = data?.nextCursor || null;
 
-    statusEl.textContent = "";
+    if (statusEl) statusEl.textContent = "";
     renderList(contents);
     updatePager();
   } catch (err) {
     console.error(err);
-    statusEl.textContent = "載入內容失敗，請稍後再試。";
+    if (statusEl) statusEl.textContent = "載入內容失敗，請稍後再試。";
   }
 }
-function setupSort() {
-      const el = document.getElementById("sort-select");
-      if (!el) return;
 
-      el.addEventListener("change", () => {
-        const [s, o] = el.value.split("_");
-        currentSort = s;
-        currentOrder = o;
-
-        currentPage = 1;
-        fetchListFromServer();
-      });
-    }
 // =======================
 // 畫出卡片列表（安全版）
 // =======================
 function renderList(list) {
+  if (!listEl) return;
+
   listEl.innerHTML = "";
 
   if (!list || list.length === 0) {
@@ -258,7 +305,6 @@ function renderList(list) {
   });
 
   listEl.appendChild(fragment);
-
   setupCardClick();
 }
 
@@ -266,8 +312,9 @@ function renderList(list) {
 // 綁定卡片點擊事件（載入詳情）
 // =======================
 function setupCardClick() {
-  const cards = listEl.querySelectorAll(".card");
+  if (!listEl) return;
 
+  const cards = listEl.querySelectorAll(".card");
   cards.forEach((card) => {
     card.addEventListener("click", () => {
       const id = Number(card.dataset.id);
@@ -282,27 +329,24 @@ function setupCardClick() {
 // =======================
 async function loadContentById(id) {
   try {
-    statusEl.textContent = "載入內容中...";
+    if (statusEl) statusEl.textContent = "載入內容中...";
 
-    const res = await fetch(`/api/contents/${id}`);
-    if (!res.ok) {
-      statusEl.textContent = res.status === 404 ? "找不到這則內容。" : `載入內容失敗（${res.status}）`;
-      return;
-    }
+    const item = await fetchJson(`${API_BASE}/api/contents/${id}`);
 
-    const item = await res.json();
-    statusEl.textContent = "";
+    if (statusEl) statusEl.textContent = "";
     showDetail(item);
   } catch (err) {
     console.error(err);
-    statusEl.textContent = "載入內容時發生錯誤，請稍後再試。";
+    if (statusEl) statusEl.textContent = "載入內容時發生錯誤，請稍後再試。";
   }
 }
 
 // =======================
-// 顯示單一內容詳情（保留你原本的邏輯）
+// 顯示單一內容詳情
 // =======================
 function showDetail(item) {
+  if (!listEl || !detailEl) return;
+
   listEl.classList.add("hidden");
   detailEl.classList.remove("hidden");
 
@@ -385,26 +429,23 @@ function showDetail(item) {
         }
 
         try {
-          statusEl.textContent = "儲存中...";
+          if (statusEl) statusEl.textContent = "儲存中...";
 
-          const res = await fetch(`/api/contents/${item.id}`, {
+          const updated = await fetchJson(`${API_BASE}/api/contents/${item.id}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ title: newTitle, content: newContent }),
           });
 
-          if (!res.ok) throw new Error("儲存失敗：" + res.status);
+          if (statusEl) statusEl.textContent = "已儲存。";
 
-          const updated = await res.json();
-          statusEl.textContent = "已儲存。";
-
-          // ✅ 列表是 server-side，更新後直接重新抓一次當前頁
+          // 列表是 server-side，更新後重新抓一次當前頁
           await fetchListFromServer();
 
           showDetail(updated);
         } catch (err) {
           console.error(err);
-          statusEl.textContent = "儲存失敗，請稍後再試。";
+          if (statusEl) statusEl.textContent = "儲存失敗，請稍後再試。";
           alert("儲存失敗：" + (err.message || ""));
         }
       });
@@ -435,23 +476,13 @@ function showDetail(item) {
     }
   }
 }
-function resetPaging() {
-  if (USE_CURSOR) {
-    cursorStack = [null];
-    cursorIndex = 0;
-    nextCursor = null;
-    hasNext = false;
-  } else {
-    currentPage = 1;
-  }
-}
+
 // =======================
 // 初次載入：先抓分類、再抓第 1 頁列表
 // =======================
 async function loadCategoriesAndFirstPage() {
   try {
-    const res = await fetch("/api/categories");
-    const categories = res.ok ? await res.json() : [];
+    const categories = await fetchJson(`${API_BASE}/api/categories`);
     renderCategoryFilters(Array.isArray(categories) ? categories : []);
     setupFilterButtons();
   } catch (err) {
@@ -459,8 +490,9 @@ async function loadCategoriesAndFirstPage() {
   }
 
   setupSearch();
+  setupSort();
   setupPager();
   fetchListFromServer();
 }
-setupSort();
+
 loadCategoriesAndFirstPage();
