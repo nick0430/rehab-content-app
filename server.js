@@ -3,7 +3,6 @@ require("dotenv").config();
 
 const express = require("express");
 const path = require("path");
-const cors = require("cors");
 
 // Prisma v7 + SQLite adapter
 const { PrismaClient } = require("./prisma/generated/client");
@@ -14,13 +13,14 @@ const adapter = new PrismaBetterSqlite3({
   url: process.env.DATABASE_URL ?? "file:./dev.db",
 });
 
+// 建立 Prisma Client
 const prisma = new PrismaClient({ adapter });
 
 const app = express();
 const port = process.env.PORT || 3000;
 
 // -----------------------
-// CORS（重點：允許 capacitor://localhost）
+// ✅ CORS（手寫版：穩定允許 Capacitor WebView）
 // -----------------------
 const ALLOWED_ORIGINS = new Set([
   "capacitor://localhost",
@@ -31,42 +31,54 @@ const ALLOWED_ORIGINS = new Set([
   "http://127.0.0.1:3000",
 ]);
 
-app.use(
-  cors({
-    origin(origin, cb) {
-      // 有些情境（同源/原生/工具）會是 undefined/null，先放行
-      if (!origin) return cb(null, true);
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
 
-      if (ALLOWED_ORIGINS.has(origin)) return cb(null, true);
+  // 只對白名單 origin 回應 Access-Control-Allow-Origin
+  if (origin && ALLOWED_ORIGINS.has(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
 
-      // 如果你未來有自訂網域，可在這裡加白名單
-      return cb(new Error("Not allowed by CORS: " + origin));
-    },
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-// 讓 preflight (OPTIONS) 都能過
-app.options("*", cors());
+  // Preflight
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+
+  next();
+});
 
 // -----------------------
 // Middleware
 // -----------------------
 app.use(express.json());
 
-// API 不要被快取（可留可不留）
+// API 不要快取（可留可不留）
 app.use("/api", (req, res, next) => {
   res.set("Cache-Control", "no-store");
   next();
 });
 
-// 靜態檔（web）
-// 注意：Render 上如果只想當 API 也可以保留，沒問題
+// 靜態檔（Web）
 app.use(express.static(path.join(__dirname, "public")));
 
 // -----------------------
-// GET /api/contents（列表）
+// ✅ 確認部署用：GET /api/ping
+// -----------------------
+app.get("/api/ping", (req, res) => {
+  res.json({
+    ok: true,
+    time: new Date().toISOString(),
+  });
+});
+
+// -----------------------
+// GET /api/contents
+// 列表：支援 category / type / q（標題）
+// 支援 offset / cursor 分頁
 // -----------------------
 app.get("/api/contents", async (req, res) => {
   const category = String(req.query.category || "all");
@@ -86,11 +98,13 @@ app.get("/api/contents", async (req, res) => {
   const sortField = allowedSort.has(sort) ? sort : "createdAt";
   const sortOrder = order === "asc" ? "asc" : "desc";
 
+  // ✅ 穩定排序（tie-breaker：id 同方向）
   const orderBy =
     sortField === "id"
       ? { id: sortOrder }
       : [{ [sortField]: sortOrder }, { id: sortOrder }];
 
+  // ✅ where（篩選）
   const baseWhere = {};
   if (category !== "all") baseWhere.category = category;
   if (type !== "all") baseWhere.type = type;
@@ -99,13 +113,16 @@ app.get("/api/contents", async (req, res) => {
   try {
     const total = await prisma.content.count({ where: baseWhere });
 
-    // Cursor Pagination
+    // ---------------------------
+    // Cursor Pagination（游標分頁）
+    // ---------------------------
     if (mode === "cursor") {
       const cursorIdRaw = req.query.cursorId;
       const cursorCreatedAtRaw = req.query.cursorCreatedAt;
 
       let where = baseWhere;
 
+      // 只有在 cursor 真的存在時才加條件（第一頁沒有 cursor）
       if (cursorIdRaw !== undefined && cursorCreatedAtRaw !== undefined) {
         const cursorId = Number(cursorIdRaw);
         const cursorCreatedAt = new Date(String(cursorCreatedAtRaw));
@@ -116,6 +133,7 @@ app.get("/api/contents", async (req, res) => {
 
         const isAsc = sortOrder === "asc";
 
+        // createdAt cursor：下一頁取更舊（desc）或更新（asc）
         const cursorWhere = {
           OR: [
             { createdAt: isAsc ? { gt: cursorCreatedAt } : { lt: cursorCreatedAt } },
@@ -131,6 +149,7 @@ app.get("/api/contents", async (req, res) => {
         where = { AND: [baseWhere, cursorWhere] };
       }
 
+      // ✅ 多拿 1 筆判斷 hasNext
       const rowsPlusOne = await prisma.content.findMany({
         where,
         select: {
@@ -163,7 +182,9 @@ app.get("/api/contents", async (req, res) => {
       });
     }
 
-    // Offset Pagination
+    // ---------------------------
+    // Offset Pagination（原本 page/limit）
+    // ---------------------------
     const pageNum = Number(req.query.page || 1);
     const page = Number.isFinite(pageNum) && pageNum >= 1 ? Math.floor(pageNum) : 1;
     const skip = (page - 1) * limit;
@@ -225,9 +246,13 @@ app.get("/api/contents/:id", async (req, res) => {
   }
 
   try {
-    const item = await prisma.content.findUnique({ where: { id } });
+    const item = await prisma.content.findUnique({
+      where: { id },
+    });
 
-    if (!item) return res.status(404).json({ message: "NOT FOUND" });
+    if (!item) {
+      return res.status(404).json({ message: "NOT FOUND" });
+    }
 
     res.json(item);
   } catch (err) {
@@ -256,7 +281,9 @@ app.put("/api/contents/:id", async (req, res) => {
 
   try {
     const oldItem = await prisma.content.findUnique({ where: { id } });
-    if (!oldItem) return res.status(404).json({ message: "NOT FOUND" });
+    if (!oldItem) {
+      return res.status(404).json({ message: "NOT FOUND" });
+    }
 
     if (oldItem.type !== "article") {
       return res.status(400).json({ message: "只有文章可編輯" });
@@ -266,7 +293,10 @@ app.put("/api/contents/:id", async (req, res) => {
     if (title !== undefined) data.title = String(title);
     if (content !== undefined) data.content = String(content);
 
-    const updated = await prisma.content.update({ where: { id }, data });
+    const updated = await prisma.content.update({
+      where: { id },
+      data,
+    });
 
     res.json(updated);
   } catch (err) {
@@ -276,12 +306,13 @@ app.put("/api/contents/:id", async (req, res) => {
 });
 
 // -----------------------
-// 啟動
+// 啟動伺服器
 // -----------------------
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
 
+// （可選）關閉時斷開 DB
 process.on("SIGINT", async () => {
   try {
     await prisma.$disconnect();
